@@ -4,85 +4,96 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 
-# --- Função de Scraping (Otimizada para Relatório) ---
-def analisar_vaga(url, cargo_alvo):
+# --- CONFIGURAÇÃO: LISTA FIXA DE CARGOS ---
+# O robô vai procurar por ESTES termos exatos dentro do site
+CARGOS_FIXOS = [
+    "DevOps Engineer",
+    "DevOps",
+    "Cloud Engineer",
+    "Site Reliability Engineer",
+    "SRE",
+    "Platform Engineer",
+    "Infrastructure Engineer",
+    "Engenheiro de Dados" # Adicionei um extra como exemplo
+]
+
+# --- Função de Análise ---
+def analisar_url(url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0'}
     
+    # Estrutura do resultado
     resultado = {
         "URL": url,
-        "Status": "Erro/Inacessível", # Padrão caso falhe
-        "Cargo Encontrado": False,
-        "Modelo": "Não especificado",
-        "Latam": False,
-        "Obs": ""
+        "Status": "Erro",
+        "Cargos Detectados": [],
+        "Modelo": [],
+        "Latam": False
     }
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
         
-        if response.status_code != 200:
-            resultado["Obs"] = f"Status Code: {response.status_code}"
-            return resultado
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # Limpeza de scripts e CSS
+            for s in soup(["script", "style"]): s.extract()
+            texto_pagina = soup.get_text().lower()
+            
+            resultado["Status"] = "✅ Lido"
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Limpeza
-        for script in soup(["script", "style"]):
-            script.extract()
-        texto = soup.get_text().lower()
-        cargo_alvo_lower = cargo_alvo.lower()
+            # 1. VERIFICAÇÃO DOS CARGOS FIXOS
+            # Varre a lista fixa e vê se algum aparece no texto
+            for cargo in CARGOS_FIXOS:
+                if cargo.lower() in texto_pagina:
+                    resultado["Cargos Detectados"].append(cargo)
+            
+            # Se a lista estiver vazia, marca como nenhum
+            if not resultado["Cargos Detectados"]:
+                resultado["Cargos Detectados"].append("Nenhum da lista")
 
-        # 1. Verifica Cargo
-        if cargo_alvo_lower in texto:
-            resultado["Cargo Encontrado"] = True
-            resultado["Status"] = "✅ Vaga Detectada"
+            # 2. VERIFICAÇÃO DE MODELO
+            if "remoto" in texto_pagina or "remote" in texto_pagina: resultado["Modelo"].append("Remoto")
+            if "híbrido" in texto_pagina or "hybrid" in texto_pagina: resultado["Modelo"].append("Híbrido")
+            if "presencial" in texto_pagina or "on-site" in texto_pagina: resultado["Modelo"].append("Presencial")
+
+            # 3. VERIFICAÇÃO DE REGIÃO (LATAM)
+            termos_latam = ["latam", "latin america", "américa latina", "south america"]
+            if any(t in texto_pagina for t in termos_latam):
+                resultado["Latam"] = True
+                
         else:
-            resultado["Status"] = "❌ Vaga não encontrada"
-
-        # 2. Verifica Modelo
-        modelos_detectados = []
-        if "remoto" in texto or "remote" in texto: modelos_detectados.append("Remoto")
-        if "híbrido" in texto or "hybrid" in texto: modelos_detectados.append("Híbrido")
-        if "presencial" in texto or "on-site" in texto: modelos_detectados.append("Presencial")
-        
-        if modelos_detectados:
-            resultado["Modelo"] = ", ".join(modelos_detectados)
-
-        # 3. Verifica LATAM
-        termos_latam = ["latam", "latin america", "américa latina"]
-        if any(t in texto for t in termos_latam):
-            resultado["Latam"] = True
+            resultado["Status"] = f"Erro {response.status_code}"
 
     except Exception as e:
-        resultado["Obs"] = str(e)
+        resultado["Status"] = "Erro de Conexão"
+
+    # Formatação final para a tabela
+    resultado["Cargos Detectados"] = ", ".join(resultado["Cargos Detectados"])
+    resultado["Modelo"] = ", ".join(resultado["Modelo"]) if resultado["Modelo"] else "Não especificado"
     
     return resultado
 
-# --- Interface do Aplicativo ---
-st.set_page_config(page_title="Relatório de Vagas", layout="wide") # Layout mais largo para a tabela
+# --- Interface do App ---
+st.set_page_config(page_title="Validador de Vagas", layout="wide")
 
-st.title("📊 Relatório de Vagas em Lote")
-st.markdown("Cole até **10 URLs** para gerar um relatório comparativo.")
+st.title("🛡️ Validador de Vagas: Tech & Latam")
+st.markdown("### Como funciona:")
+st.markdown("1. O sistema já sabe que você busca: **DevOps, SRE, Cloud, Platform, Infra**.")
+st.markdown("2. Você cola os links, e ele diz qual cargo encontrou lá dentro e se é LATAM.")
 
-# Entradas
-col1, col2 = st.columns([1, 2])
-with col1:
-    cargo = st.text_input("Nome da Vaga (palavra-chave):", value="DevOps")
-with col2:
-    urls_input = st.text_area("Cole as URLs (uma por linha):", height=150, placeholder="https://site1.com/vaga\nhttps://site2.com/job")
+# Exibe a lista fixa para o usuário ter certeza
+with st.expander("Ver lista fixa de cargos pesquisados"):
+    st.write(CARGOS_FIXOS)
 
-if st.button("Gerar Relatório"):
-    # Limpa e prepara a lista de URLs
+# Área de Texto
+urls_input = st.text_area("Cole suas URLs aqui (uma por linha):", height=200)
+
+if st.button("Analisar Lista"):
     urls_lista = [u.strip() for u in urls_input.split('\n') if u.strip()]
-    
-    if not urls_lista:
-        st.warning("Por favor, insira pelo menos uma URL.")
-    else:
-        # Limita a 10 para evitar sobrecarga (opcional, mas recomendado)
-        if len(urls_lista) > 10:
-            st.warning("Você inseriu mais de 10 URLs. Analisando apenas as 10 primeiras para garantir a performance.")
-            urls_lista = urls_lista[:10]
 
+    if not urls_lista:
+        st.warning("A lista está vazia.")
+    else:
         # Barra de progresso
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -91,45 +102,35 @@ if st.button("Gerar Relatório"):
 
         # Loop de processamento
         for i, url in enumerate(urls_lista):
-            status_text.text(f"Analisando site {i+1}/{len(urls_lista)}...")
+            status_text.text(f"Verificando link {i+1} de {len(urls_lista)}...")
             
-            # Chama a função de análise
-            dados = analisar_vaga(url, cargo)
+            dados = analisar_url(url)
             dados_relatorio.append(dados)
             
-            # Atualiza barra
             progress_bar.progress((i + 1) / len(urls_lista))
-            
-            # Pequena pausa para ser educado com os servidores (evita bloqueio)
-            time.sleep(0.5)
+            time.sleep(0.5) # Pausa amigável
 
-        status_text.text("Análise concluída!")
+        status_text.text("Concluído!")
         progress_bar.empty()
 
-        # --- Exibição dos Resultados ---
+        # --- Exibição da Tabela ---
         st.divider()
-        st.subheader(f"Relatório para: {cargo}")
+        st.subheader("Resultado da Análise")
 
-        # Cria o DataFrame (Tabela)
         df = pd.DataFrame(dados_relatorio)
 
-        # Reordena colunas para visualização melhor
-        colunas_ordem = ["Status", "Cargo Encontrado", "Modelo", "Latam", "URL", "Obs"]
+        # Reordenar colunas
+        colunas_ordem = ["Status", "Cargos Detectados", "Modelo", "Latam", "URL"]
         df = df[colunas_ordem]
 
-        # Mostra a tabela interativa
+        # Estilização da tabela
         st.dataframe(
-            df, 
+            df,
             column_config={
-                "URL": st.column_config.LinkColumn("Link da Vaga"),
+                "URL": st.column_config.LinkColumn("Acessar Vaga"),
                 "Latam": st.column_config.CheckboxColumn("É Latam?", default=False),
-                "Cargo Encontrado": st.column_config.CheckboxColumn("Cargo Ok?", default=False),
+                "Cargos Detectados": st.column_config.TextColumn("Cargo(s) Encontrado(s)"),
             },
-            hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
-
-        # Estatísticas rápidas
-        total = len(df)
-        encontrados = len(df[df["Cargo Encontrado"] == True])
-        st.metric(label="Vagas que deram 'Match'", value=f"{encontrados} de {total}")
